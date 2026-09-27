@@ -12,6 +12,7 @@ import {
   withPaymentIntentOrgPermissions,
 } from "src/middlewares/rbac";
 import { FinanceController } from "src/controllers/app/finance.controller";
+import { BillingReviewController } from "src/controllers/app/billing-review.controller";
 
 const router = Router();
 
@@ -237,6 +238,14 @@ router.get(
   withOrgPermissions(),
   requirePermission("billing:view:any"),
   FinanceController.listInvoices,
+);
+
+router.get(
+  "/organisation/:organisationId/completed-visits/billing-review",
+  requireWebAuth,
+  withOrgPermissions(),
+  requirePermission("billing:view:any"),
+  BillingReviewController.list,
 );
 
 router.post(
