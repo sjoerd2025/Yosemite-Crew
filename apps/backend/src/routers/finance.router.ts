@@ -245,6 +245,7 @@ router.get(
   requireWebAuth,
   withOrgPermissions(),
   requirePermission("billing:view:any"),
+  requirePermission("appointments:view:any"),
   BillingReviewController.list,
 );
 
