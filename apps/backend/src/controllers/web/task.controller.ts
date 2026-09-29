@@ -1,6 +1,7 @@
 // controllers/task.controller.ts
 import { Request, Response } from "express";
 import { ParamsDictionary } from "express-serve-static-core";
+import { z } from "zod";
 import { AuthenticatedRequest } from "src/middlewares/auth";
 import type { OrgRequest } from "src/middlewares/rbac";
 import type { Permission } from "src/models/role-permission";
@@ -33,6 +34,7 @@ import {
   UpdateTaskTemplateInput,
 } from "src/services/taskTemplate.service";
 import {
+  type CompanionAccessRequest,
   parentHasCompanionFeature,
   readBodyPatientId,
 } from "src/middlewares/companion-access";
@@ -58,6 +60,21 @@ type ChangeStatusRequestBody = {
   completion?: CompleteTaskInput;
 };
 
+type ParentTaskListRequestBody = {
+  patientId?: string;
+  fromDueAt?: string;
+  toDueAt?: string;
+  status?: string;
+};
+
+type ParentTaskListRequestQuery = {
+  patientId?: string | string[];
+  companionId?: string | string[];
+  fromDueAt?: string | string[];
+  toDueAt?: string | string[];
+  status?: string | string[];
+};
+
 type RecurrenceScope = "THIS" | "THIS_AND_FOLLOWING" | "ALL";
 
 type CreateTaskTemplateRequestBody = Omit<CreateTaskTemplateInput, "createdBy">;
@@ -69,6 +86,51 @@ const TASK_STATUSES = new Set<TaskStatus>([
   "COMPLETED",
   "CANCELLED",
 ]);
+const TaskListDateFilterSchema = z
+  .string()
+  .refine((value) => !Number.isNaN(new Date(value).getTime()));
+const TaskListStatusFilterSchema = z
+  .string()
+  .min(1)
+  .refine((value) =>
+    value.split(",").every((status) => TASK_STATUSES.has(status as TaskStatus)),
+  );
+const ParentTaskListBodySchema = z
+  .object({
+    patientId: z.string().min(1).optional(),
+    fromDueAt: TaskListDateFilterSchema.optional(),
+    toDueAt: TaskListDateFilterSchema.optional(),
+    status: TaskListStatusFilterSchema.optional(),
+  })
+  .strict();
+const ParentTaskListQuerySchema = z
+  .object({
+    patientId: z
+      .union([z.string().min(1), z.array(z.string().min(1)).min(1)])
+      .optional(),
+    companionId: z
+      .union([z.string().min(1), z.array(z.string().min(1)).min(1)])
+      .optional(),
+    fromDueAt: z
+      .union([
+        TaskListDateFilterSchema,
+        z.array(TaskListDateFilterSchema).min(1),
+      ])
+      .optional(),
+    toDueAt: z
+      .union([
+        TaskListDateFilterSchema,
+        z.array(TaskListDateFilterSchema).min(1),
+      ])
+      .optional(),
+    status: z
+      .union([
+        TaskListStatusFilterSchema,
+        z.array(TaskListStatusFilterSchema).min(1),
+      ])
+      .optional(),
+  })
+  .strict();
 const TASK_PRIORITIES = new Set<TaskPriority>([
   "LOW",
   "MEDIUM",
@@ -641,17 +703,20 @@ export const TaskController = {
     req: Request<
       ParamsDictionary,
       unknown,
-      unknown,
-      {
-        patientId?: string;
-        fromDueAt?: string;
-        toDueAt?: string;
-        status?: string;
-      }
+      ParentTaskListRequestBody,
+      ParentTaskListRequestQuery
     >,
     res: Response,
   ) => {
     try {
+      const parsedFilters =
+        req.method === "GET"
+          ? ParentTaskListQuerySchema.safeParse(req.query)
+          : ParentTaskListBodySchema.safeParse(req.body ?? {});
+      if (!parsedFilters.success) {
+        return res.status(400).json({ message: "Invalid task filters" });
+      }
+
       const providerUserId = resolveUserId(req);
       const authUser =
         await AuthUserMobileService.getByProviderUserId(providerUserId);
@@ -662,10 +727,14 @@ export const TaskController = {
 
       const tasks = await TaskService.listForParent({
         parentId,
-        patientId: req.query.patientId,
-        fromDueAt: parseDateQuery(req.query.fromDueAt),
-        toDueAt: parseDateQuery(req.query.toDueAt),
-        status: parseStatusList(req.query.status),
+        patientId:
+          pickFirstQueryValue(parsedFilters.data.patientId) ??
+          ("companionId" in parsedFilters.data
+            ? pickFirstQueryValue(parsedFilters.data.companionId)
+            : undefined),
+        fromDueAt: parseDateQuery(parsedFilters.data.fromDueAt),
+        toDueAt: parseDateQuery(parsedFilters.data.toDueAt),
+        status: parseStatusList(parsedFilters.data.status),
       });
 
       res.json(tasks);
@@ -719,8 +788,9 @@ export const TaskController = {
   },
 
   // Companion Task List
-  // Mobile: a parent sees the companion's parent tasks only, from every
-  // practice. The route has checked the caller's link to the companion.
+  // Mobile: a parent sees every parent task of the companion, from every
+  // practice, whoever it is assigned to. The route has checked the caller's
+  // link to the companion and hands over the companion it granted.
   listForCompanionMobile: async (
     req: Request<{ patientId: string }, unknown, unknown, TaskListQuery>,
     res: Response,
@@ -728,11 +798,10 @@ export const TaskController = {
     try {
       const tasks = await TaskService.listForCompanion({
         ...parseTaskListQueryFilters(req.query),
-        patientId: req.params.patientId,
+        patientId: (req as CompanionAccessRequest).grantedPatientId ?? "",
         organisationId: undefined,
         audience: "PARENT_TASK",
         assignedRole: undefined,
-        assignedTo: pickFirstQueryValue(req.query.assignedTo),
       });
 
       res.json(tasks);

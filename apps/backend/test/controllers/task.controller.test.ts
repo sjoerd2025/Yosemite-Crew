@@ -649,8 +649,9 @@ describe("Task Controllers", () => {
 
       it("should list with full filters", async () => {
         (req as any).userId = "u1";
+        req.method = "GET";
         req.query = {
-          patientId: "c1",
+          companionId: "c1",
           fromDueAt: "2023-01-01",
           toDueAt: "2023-01-31",
           status: "PENDING,IN_PROGRESS",
@@ -672,8 +673,9 @@ describe("Task Controllers", () => {
         });
       });
 
-      it("should list with invalid date query (returns undefined)", async () => {
+      it("should reject an invalid date query", async () => {
         (req as any).userId = "u1";
+        req.method = "GET";
         req.query = { fromDueAt: "invalid" };
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         (mockedAuthService.getByProviderUserId as any).mockResolvedValue({
@@ -683,11 +685,8 @@ describe("Task Controllers", () => {
         (mockedTaskService.listForParent as any).mockResolvedValue([]);
 
         await TaskController.listParentTasks(req as any, res as Response);
-        expect(mockedTaskService.listForParent).toHaveBeenCalledWith(
-          expect.objectContaining({
-            fromDueAt: undefined,
-          }),
-        );
+        expect(statusMock).toHaveBeenCalledWith(400);
+        expect(mockedTaskService.listForParent).not.toHaveBeenCalled();
       });
 
       it("should handle error", async () => {
@@ -827,11 +826,13 @@ describe("Task Controllers", () => {
     });
 
     describe("listForCompanionMobile", () => {
-      it("lists only parent tasks, whatever audience or role the query asks for", async () => {
+      it("lists only parent tasks, whatever audience, role or assignee the query asks for", async () => {
         req.params = { patientId: "pat-1" };
+        (req as any).grantedPatientId = "pat-1";
         req.query = {
           audience: "EMPLOYEE_TASK",
           assignedRole: "EMPLOYEE_TASK",
+          assignedTo: "someone-else",
           status: "PENDING",
         } as any;
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -850,6 +851,42 @@ describe("Task Controllers", () => {
             assignedRole: undefined,
             status: ["PENDING"],
           }),
+        );
+        const [params] = (mockedTaskService.listForCompanion as jest.Mock).mock
+          .calls[0] as [{ assignedTo?: string }];
+        expect(params.assignedTo).toBeUndefined();
+      });
+
+      it("lists the companion the route granted, not the raw path segment", async () => {
+        req.params = { patientId: "pat-other" };
+        (req as any).grantedPatientId = "pat-1";
+        req.query = {} as any;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (mockedTaskService.listForCompanion as any).mockResolvedValue([]);
+
+        await TaskController.listForCompanionMobile(
+          req as any,
+          res as Response,
+        );
+
+        expect(mockedTaskService.listForCompanion).toHaveBeenCalledWith(
+          expect.objectContaining({ patientId: "pat-1" }),
+        );
+      });
+
+      it("names no companion when the route granted none", async () => {
+        req.params = { patientId: "pat-1" };
+        req.query = {} as any;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (mockedTaskService.listForCompanion as any).mockResolvedValue([]);
+
+        await TaskController.listForCompanionMobile(
+          req as any,
+          res as Response,
+        );
+
+        expect(mockedTaskService.listForCompanion).toHaveBeenCalledWith(
+          expect.objectContaining({ patientId: "" }),
         );
       });
 
