@@ -244,8 +244,7 @@ router.get(
   "/organisation/:organisationId/completed-visits/billing-review",
   requireWebAuth,
   withOrgPermissions(),
-  requirePermission("billing:view:any"),
-  requirePermission("appointments:view:any"),
+  requireAllPermissions(["billing:view:any", "appointments:view:any"]),
   BillingReviewController.list,
 );
 
